@@ -1,11 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
+import type { JSONContent } from "@tiptap/core";
 import { describe, expect, it } from "vitest";
+import { criticMarkdownToEditorState } from "./critic-markup";
 import {
   splitYamlFrontmatter,
   toHtml,
   toMarkdown,
   rawMarkdownBlockAttribute,
+  protectRichTextRoundTripMarkdown,
 } from "./markdown";
 
 function readMarkdownFixture(name: string): string {
@@ -194,5 +197,70 @@ describe("toMarkdown", () => {
     expect(
       toMarkdown(`<div ${rawMarkdownBlockAttribute}="${encoded}"></div>`),
     ).toBe(protectedMarkdown);
+  });
+});
+
+describe("protectRichTextRoundTripMarkdown", () => {
+  it("does not wrap a table row in a raw block just because two of its cells each hold their own code span", () => {
+    // Two code spans in different cells of the same row (no pipe inside
+    // either span) — the gap *between* the spans crosses the real column
+    // delimiter, which is not a pipe-inside-a-code-span at all.
+    const markdown = [
+      "| ID | A | B |",
+      "| --- | --- | --- |",
+      "| X-01 | `alpha` | `beta` |",
+      "",
+    ].join("\n");
+
+    const protectedMarkdown = protectRichTextRoundTripMarkdown(markdown);
+
+    expect(protectedMarkdown).not.toContain(rawMarkdownBlockAttribute);
+    expect(protectedMarkdown).toBe(markdown);
+  });
+});
+
+function collectNodeTypes(node: JSONContent, types: string[]): void {
+  if (node.type) types.push(node.type);
+  for (const child of node.content ?? []) collectNodeTypes(child, types);
+}
+
+function collectText(node: JSONContent, out: string[]): void {
+  if (typeof node.text === "string") out.push(node.text);
+  for (const child of node.content ?? []) collectText(child, out);
+}
+
+describe("criticMarkdownToEditorState", () => {
+  it("renders a second table as a real table instead of vanishing or absorbing the next heading as raw text", () => {
+    // Mirrors a real RAID log: a table row with code spans in two different
+    // cells, immediately followed (no blank line, matching Roughdraft's own
+    // "open" normalization) by another heading + table.
+    const markdown = [
+      "## Table One",
+      "| ID | A | B |",
+      "| --- | --- | --- |",
+      "| X-01 | `alpha` | `beta` |",
+      "## Table Two",
+      "| ID | Note |",
+      "| --- | --- |",
+      "| X-02 | plain row, no code spans |",
+      "",
+    ].join("\n");
+
+    const { doc } = criticMarkdownToEditorState(markdown);
+
+    const types: string[] = [];
+    collectNodeTypes(doc, types);
+    const tableCount = types.filter((type) => type === "table").length;
+    expect(tableCount).toBe(2);
+
+    const text: string[] = [];
+    collectText(doc, text);
+    const joined = text.join(" ");
+    // The second heading and table must render as real nodes, not as
+    // literal markdown source text absorbed into a stray paragraph.
+    expect(joined).not.toContain("##");
+    expect(joined).not.toContain("|");
+    expect(joined).toContain("Table Two");
+    expect(joined).toContain("X-02");
   });
 });

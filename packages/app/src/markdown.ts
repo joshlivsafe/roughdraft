@@ -50,9 +50,13 @@ export function decodeRawMarkdownBlock(encoded: string): string {
 }
 
 function createRawMarkdownBlock(markdown: string): string {
+  // The trailing blank line is load-bearing: a CommonMark HTML block only
+  // terminates on a blank line, so without it any content immediately
+  // following (e.g. a heading with no blank line before it) gets absorbed
+  // into this block as inert raw text instead of being parsed normally.
   return `<div ${rawMarkdownBlockAttribute}="${escapeHtml(
     encodeRawMarkdownBlock(markdown),
-  )}"></div>\n`;
+  )}"></div>\n\n`;
 }
 
 function protectRawHtmlBlocks(markdown: string): string {
@@ -73,8 +77,30 @@ function protectIndentedCodeAfterLists(markdown: string): string {
   );
 }
 
-function codeSpanContainsPipe(value: string): boolean {
-  return /`[^`\n]*\|[^`\n]*`/.test(value);
+function lineHasPipeInsideCodeSpan(line: string): boolean {
+  // Split on backtick delimiters and pair them left-to-right: parts[1],
+  // parts[3], parts[5], ... are the text *inside* a matched code span. A
+  // naive `` `[^`]*\|[^`]*` `` scan instead re-tries a match starting from
+  // every backtick, including a closing backtick of one span paired with
+  // the opening backtick of a later, unrelated span on the same line — and
+  // if a real column-delimiter pipe falls between those two spans, that
+  // false pairing reports a pipe "inside" a code span that doesn't exist.
+  const parts = line.split("`");
+  const backtickCount = parts.length - 1;
+  const matchedSpanCount = Math.floor(backtickCount / 2);
+
+  for (let spanIndex = 0; spanIndex < matchedSpanCount; spanIndex += 1) {
+    const insidePart = parts[spanIndex * 2 + 1] ?? "";
+    if (insidePart.includes("|")) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function rowNeedsPipeProtection(row: string): boolean {
+  return row.includes("\\|") || lineHasPipeInsideCodeSpan(row);
 }
 
 function protectPipeSensitiveTables(markdown: string): string {
@@ -103,9 +129,14 @@ function protectPipeSensitiveTables(markdown: string): string {
       index += 1;
     }
 
-    const raw = tableLines.join("");
-    const needsProtection = raw.includes("\\|") || codeSpanContainsPipe(raw);
-    output.push(needsProtection ? createRawMarkdownBlock(raw) : raw);
+    const needsProtection = tableLines.some((row) =>
+      rowNeedsPipeProtection(row),
+    );
+    output.push(
+      needsProtection
+        ? createRawMarkdownBlock(tableLines.join(""))
+        : tableLines.join(""),
+    );
     index -= 1;
   }
 

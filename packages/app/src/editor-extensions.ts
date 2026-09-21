@@ -17,7 +17,7 @@ import type {
 import { Plugin, PluginKey } from "@tiptap/pm/state";
 import { Decoration, DecorationSet } from "@tiptap/pm/view";
 import StarterKit from "@tiptap/starter-kit";
-import { rawMarkdownBlockAttribute } from "./markdown";
+import { decodeRawMarkdownBlock, rawMarkdownBlockAttribute } from "./markdown";
 
 declare module "@tiptap/core" {
   interface Commands<ReturnType> {
@@ -762,8 +762,14 @@ const RawMarkdownBlock = Node.create({
     return [{ tag: `div[${rawMarkdownBlockAttribute}]`, priority: 1000 }];
   },
 
-  renderHTML({ HTMLAttributes }) {
-    return ["div", mergeAttributes(HTMLAttributes)];
+  renderHTML({ HTMLAttributes, node }) {
+    // No node view previously decoded/displayed `rawMarkdown`, so a
+    // protected block rendered as an empty, invisible div — silently
+    // dropping its content instead of showing it. Render the decoded
+    // source as plain text so protected content stays visible even though
+    // it isn't rich-text-editable.
+    const decoded = decodeRawMarkdownBlock(node.attrs.rawMarkdown ?? "");
+    return ["div", mergeAttributes(HTMLAttributes), decoded];
   },
 });
 
