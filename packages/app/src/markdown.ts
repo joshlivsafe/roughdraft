@@ -468,7 +468,15 @@ export function createTurndownService(): TurndownService {
       const headerRow = getFirstTableRow(table);
       if (!headerRow) return content;
 
-      const lines = content.replace(/\n+/g, "\n").trim().split("\n");
+      const lines = content
+        .replace(/\n+/g, "\n")
+        .trim()
+        .split("\n")
+        // The GFM tables plugin pads each cell to a minimum width of 3
+        // characters (unrelated to other rows' widths); collapse that
+        // back down to single-space cell padding so a hand-written,
+        // unaligned table round-trips without column-alignment diff noise.
+        .map((line) => line.replace(/ {2,}\|/g, " |"));
       if (lines.length === 0) return content;
 
       if (!isMarkdownTableDivider(lines[1])) {
@@ -479,6 +487,13 @@ export function createTurndownService(): TurndownService {
       const caption = captionContent ? `${captionContent}\n\n` : "";
 
       return `\n\n${caption}${lines.join("\n")}\n\n`;
+    },
+  });
+
+  service.addRule("thematicBreak", {
+    filter: "hr",
+    replacement() {
+      return "\n\n---\n\n";
     },
   });
 
@@ -562,19 +577,15 @@ export function createTurndownService(): TurndownService {
 const turndown = createTurndownService();
 
 /**
- * Collapse runs of 3+ newlines to 2 and remove the blank line that
- * Turndown inserts before/after ATX headings.  This keeps block
- * separation where it matters (between consecutive paragraphs) while
- * producing a more compact output that round-trips with fewer
- * gratuitous whitespace changes.
+ * Collapse runs of 3+ newlines to 2. A ProseMirror document has no concept
+ * of "was there a blank line here in the source", so headings keep
+ * Turndown's own blank line before/after them rather than having it
+ * stripped — stripping it was indistinguishable from deleting a blank line
+ * the user actually wrote, which is exactly the corruption this guards
+ * against now.
  */
 export function normalizeBlockSpacing(md: string): string {
-  let normalized = md.replace(/\n{3,}/g, "\n\n");
-  // Remove blank line immediately before a heading.
-  normalized = normalized.replace(/\n\n(#{1,6} )/g, "\n$1");
-  // Remove blank line immediately after a heading line.
-  normalized = normalized.replace(/(^#{1,6} [^\n]+)\n\n/gm, "$1\n");
-  return normalized;
+  return md.replace(/\n{3,}/g, "\n\n");
 }
 
 export function toMarkdown(html: string): string {

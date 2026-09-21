@@ -3,6 +3,7 @@ title: Mixed document
 ---
 
 # Mixed
+
 | Column | Value |
 | --- | --- |
 | Link | [Draft](./draft.md) |

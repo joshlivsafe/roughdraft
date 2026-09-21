@@ -625,7 +625,7 @@ describe("PageCard editor integration", () => {
 
     expect(rendered.onSave).toHaveBeenCalledTimes(1);
     expect(rendered.onSave.mock.calls[0]?.[1]).toBe(
-      `${frontmatter}# Body\nKeep this body editable. updated\n`,
+      `${frontmatter}# Body\n\nKeep this body editable. updated\n`,
     );
   });
 
@@ -702,6 +702,7 @@ describe("PageCard editor integration", () => {
     expect(rendered.onSave.mock.calls[0]?.[1]).toBe(
       [
         "# Body",
+        "",
         "| Column | Value |",
         "| --- | --- |",
         "| Body table | This table should remain editable as Markdown content. |",
@@ -720,6 +721,11 @@ describe("PageCard editor integration", () => {
         "| --- | --- |",
         "| Body table | This table is the first body block. |",
       ],
+      expectedBodyLines: [
+        "| Column | Value |",
+        "| --- | --- |",
+        "| Body table | This table is the first body block. |",
+      ],
     },
     {
       label: "after a heading",
@@ -729,10 +735,22 @@ describe("PageCard editor integration", () => {
         "| --- | --- |",
         "| Body table | This table follows a heading. |",
       ],
+      // The rich-text round trip always adds a blank line around a
+      // heading (a ProseMirror doc has no way to preserve "no blank line
+      // here"), so the saved output gains one even though the input didn't
+      // have it.
+      expectedBodyLines: [
+        "# Body",
+        "",
+        "| Column | Value |",
+        "| --- | --- |",
+        "| Body table | This table follows a heading. |",
+      ],
     },
   ])("rich-text edits preserve table headers after frontmatter $label", async ({
     label,
     bodyLines,
+    expectedBodyLines,
   }) => {
     const frontmatter = ["---", "title: Table body", "---", ""].join("\n");
     const body = [...bodyLines, ""].join("\n");
@@ -756,7 +774,7 @@ describe("PageCard editor integration", () => {
 
     expect(rendered.onSave).toHaveBeenCalledTimes(1);
     expect(rendered.onSave.mock.calls[0]?.[1]).toBe(
-      `${frontmatter}${[...bodyLines, "", "updated", ""].join("\n")}`,
+      `${frontmatter}${[...expectedBodyLines, "", "updated", ""].join("\n")}`,
     );
   });
 

@@ -104,6 +104,7 @@ describe("toHtml", () => {
     expect(toMarkdown(toHtml(readMarkdownFixture("headerless-table.md")))).toBe(
       [
         "# Headerless Table",
+        "",
         "|     |     |",
         "| --- | --- |",
         "| First | Ready |",
@@ -115,7 +116,12 @@ describe("toHtml", () => {
 });
 
 describe("normalizeBlockSpacing", () => {
-  it("does not add blank lines between headings and adjacent blocks on round-trip", () => {
+  it("adds a blank line around every heading, even when the source had none", () => {
+    // A ProseMirror doc has no way to know whether the source had a blank
+    // line before/after a given heading, so we can't preserve that exactly.
+    // Instead we always add one, matching Turndown's own heading spacing,
+    // so an *existing* blank line (e.g. between a table and the next
+    // heading) is never silently dropped.
     const compact = [
       "# OpenAI Chat API Compatibility Plan",
       "## Goal",
@@ -129,7 +135,26 @@ describe("normalizeBlockSpacing", () => {
       "",
     ].join("\n");
 
-    expect(toMarkdown(toHtml(compact))).toBe(compact);
+    expect(toMarkdown(toHtml(compact))).toBe(
+      [
+        "# OpenAI Chat API Compatibility Plan",
+        "",
+        "## Goal",
+        "",
+        "Build a Python/Flask service that exposes endpoints.",
+        "",
+        "## Source References",
+        "",
+        "- Codex app-server documentation",
+        "- OpenAI Chat Completions overview",
+        "",
+        "## Key Capabilities",
+        "",
+        "1. First capability",
+        "2. Second capability",
+        "",
+      ].join("\n"),
+    );
   });
 
   it("preserves paragraph separation", () => {
@@ -163,6 +188,27 @@ describe("normalizeBlockSpacing", () => {
     const markdown = toMarkdown(html);
 
     expect(markdown).toBe("- Parent\n  - Nested\n");
+  });
+});
+
+describe("thematic break round-trip", () => {
+  it("preserves a --- thematic break instead of rewriting it as * * *", () => {
+    const markdown = "Above.\n\n---\n\nBelow.\n";
+
+    expect(toMarkdown(toHtml(markdown))).toBe(markdown);
+  });
+});
+
+describe("table cell padding round-trip", () => {
+  it("does not column-align a hand-written, unpadded header table", () => {
+    const markdown = [
+      "| ID | Status |",
+      "| --- | --- |",
+      "| R-1 | Open |",
+      "",
+    ].join("\n");
+
+    expect(toMarkdown(toHtml(markdown))).toBe(markdown);
   });
 });
 
@@ -232,8 +278,9 @@ function collectText(node: JSONContent, out: string[]): void {
 describe("criticMarkdownToEditorState", () => {
   it("renders a second table as a real table instead of vanishing or absorbing the next heading as raw text", () => {
     // Mirrors a real RAID log: a table row with code spans in two different
-    // cells, immediately followed (no blank line, matching Roughdraft's own
-    // "open" normalization) by another heading + table.
+    // cells, immediately followed by another heading + table with no blank
+    // line between them (parsing must not depend on that blank line being
+    // present).
     const markdown = [
       "## Table One",
       "| ID | A | B |",

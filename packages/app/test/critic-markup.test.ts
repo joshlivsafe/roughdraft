@@ -37,6 +37,7 @@ describe("CriticMarkup comments", () => {
       "---",
       "",
       "# Body",
+      "",
       "Opening this file in rich text should not rewrite frontmatter.",
       "",
     ].join("\n");
@@ -157,7 +158,7 @@ describe("CriticMarkup comments", () => {
 
     expect(endmatter).toBeNull();
     expect(comments.size).toBe(0);
-    expect(output).toContain("* * *");
+    expect(output).toContain("---");
     expect(output).toContain("```yaml");
     expect(output).toContain("comments:");
     expect(output).toContain("suggestions:");
