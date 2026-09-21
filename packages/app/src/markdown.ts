@@ -401,9 +401,10 @@ export function createTurndownService(): TurndownService {
     filter: "li",
     replacement(content, node, options) {
       const trimmed = content
+        .replace(/\n{2,}/g, "\n")
         .replace(/^\n+/, "")
         .replace(/\n+$/, "\n")
-        .replace(/\n/gm, "\n  ");
+        .replace(/\n(?!$)/g, "\n  ");
 
       let prefix = `${options.bulletListMarker} `;
       const parent = node.parentNode;

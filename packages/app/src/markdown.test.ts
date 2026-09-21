@@ -140,6 +140,27 @@ describe("normalizeBlockSpacing", () => {
 
     expect(toMarkdown(html)).toBe("- Alpha\n- Beta\n");
   });
+
+  it("does not leave whitespace-only lines between paragraph-wrapped list items", () => {
+    const html =
+      "<ul><li><p>Alpha</p></li><li><p>Beta</p></li></ul><p>After</p>";
+
+    const markdown = toMarkdown(html);
+
+    expect(markdown).toBe("- Alpha\n- Beta\n\nAfter\n");
+    for (const line of markdown.split("\n")) {
+      expect(line).not.toMatch(/^\s+$/);
+    }
+  });
+
+  it("indents nested list content under a paragraph-wrapped item", () => {
+    const html =
+      "<ul><li><p>Parent</p><ul><li><p>Nested</p></li></ul></li></ul>";
+
+    const markdown = toMarkdown(html);
+
+    expect(markdown).toBe("- Parent\n  - Nested\n");
+  });
 });
 
 describe("toMarkdown", () => {
