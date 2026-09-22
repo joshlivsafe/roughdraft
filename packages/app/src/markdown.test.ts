@@ -212,6 +212,73 @@ describe("table cell padding round-trip", () => {
   });
 });
 
+describe("mermaid code fence round-trip", () => {
+  it("preserves a mermaid fence untouched through open/save", () => {
+    const markdown = [
+      "Above.",
+      "",
+      "```mermaid",
+      "graph TD",
+      "  A --> B",
+      "```",
+      "",
+      "Below.",
+      "",
+    ].join("\n");
+
+    expect(toMarkdown(toHtml(markdown))).toBe(markdown);
+  });
+
+  it("preserves a mermaid fence containing a blank line", () => {
+    const markdown = [
+      "```mermaid",
+      "graph TD",
+      "  A --> B",
+      "",
+      "  B --> C",
+      "```",
+      "",
+    ].join("\n");
+
+    expect(toMarkdown(toHtml(markdown))).toBe(markdown);
+  });
+
+  it("preserves a mermaid fence containing backtick-like text", () => {
+    const markdown = [
+      "```mermaid",
+      "sequenceDiagram",
+      "  Alice->>Bob: `not a code span`",
+      "```",
+      "",
+    ].join("\n");
+
+    expect(toMarkdown(toHtml(markdown))).toBe(markdown);
+  });
+
+  it("preserves a mermaid fence's content when adjacent to a heading and list", () => {
+    // Headings always get a blank line inserted around them (see
+    // normalizeBlockSpacing above) — that's expected serializer behavior,
+    // not something this fixture should fight. What must survive exactly is
+    // the fence and its content.
+    const markdown = [
+      "## Diagram",
+      "```mermaid",
+      "graph TD",
+      "  A --> B",
+      "```",
+      "- follow-up item",
+      "",
+    ].join("\n");
+
+    const roundTripped = toMarkdown(toHtml(markdown));
+
+    expect(roundTripped).toContain(
+      ["```mermaid", "graph TD", "  A --> B", "```"].join("\n"),
+    );
+    expect(roundTripped).toContain("- follow-up item");
+  });
+});
+
 describe("toMarkdown", () => {
   it("round-trips local links and images to normalized markdown paths", () => {
     const markdown = toMarkdown(
