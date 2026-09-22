@@ -28,7 +28,7 @@ describe("mcp", () => {
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it("omits timeoutSeconds from review watch calls unless the tool caller provides one", async () => {
+  it("keeps every review watch request bounded even when the tool caller provides no timeoutSeconds", async () => {
     const requestBodies: Array<Record<string, unknown>> = [];
     const fetchImpl: typeof fetch = async (_input, init) => {
       requestBodies.push(JSON.parse(String(init?.body ?? "{}")));
@@ -57,9 +57,63 @@ describe("mcp", () => {
       batchWindowSeconds: 0.25,
       fromNow: true,
     });
-    expect(requestBodies[0]).not.toHaveProperty("timeoutSeconds");
+    // No single request may go out unbounded (see
+    // REVIEW_EVENTS_WATCH_CHUNK_SECONDS) — omitting timeoutSeconds means
+    // "wait indefinitely" at the tool-call level, achieved by chunking, not
+    // by an unbounded fetch to the server.
+    expect(typeof requestBodies[0]?.timeoutSeconds).toBe("number");
+    expect(requestBodies[0]?.timeoutSeconds).toBeLessThanOrEqual(300);
     expect(requestBodies[1]).toMatchObject({
       timeoutSeconds: 5,
+    });
+  });
+
+  it("resumes review watch chunks from nextSequence instead of rescanning from now", async () => {
+    const requestBodies: Array<Record<string, unknown>> = [];
+    const fetchImpl: typeof fetch = async (_input, init) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<
+        string,
+        unknown
+      >;
+      requestBodies.push(body);
+
+      if (requestBodies.length < 3) {
+        return new Response(
+          JSON.stringify({ events: [], timedOut: true, nextSequence: 5 }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+
+      return new Response(
+        JSON.stringify({
+          events: [{ documentPath, type: "review.completed" }],
+          timedOut: false,
+          nextSequence: 6,
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    };
+
+    const result = await callTool(
+      "roughdraft_watch_review_events",
+      { documentPath, projectPath: projectDir },
+      { ROUGHDRAFT_STATE_FILE: stateFile },
+      fetchImpl,
+    );
+
+    expect(requestBodies.length).toBeGreaterThanOrEqual(3);
+    expect(requestBodies[0]?.fromNow).toBe(true);
+    expect(requestBodies[1]).toMatchObject({
+      afterSequence: 5,
+      fromNow: false,
+    });
+    expect(requestBodies[2]).toMatchObject({
+      afterSequence: 5,
+      fromNow: false,
+    });
+    expect(result).toMatchObject({
+      timedOut: false,
+      events: [{ documentPath, type: "review.completed" }],
     });
   });
 

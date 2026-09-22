@@ -6,6 +6,7 @@ import {
   extractRoughdraftReviewIndex,
   markRoughdraftResolved,
 } from "@roughdraft/rfm";
+import { watchReviewEventsChunked } from "./review-events-watch-client.js";
 
 interface JsonRpcRequest {
   jsonrpc?: "2.0";
@@ -271,37 +272,23 @@ export async function callTool(
       throw new Error("Roughdraft is not running. Start it before watching.");
     }
 
-    const body: {
-      projectPath: string;
-      path: string;
-      timeoutSeconds?: number;
-      batchWindowSeconds: number;
-      fromNow: boolean;
-    } = {
-      projectPath,
-      path: path.relative(projectPath, documentPath),
-      batchWindowSeconds:
-        typeof args.batchWindowSeconds === "number"
-          ? args.batchWindowSeconds
-          : 0.25,
-      fromNow: true,
-    };
-    if (typeof args.timeoutSeconds === "number") {
-      body.timeoutSeconds = args.timeoutSeconds;
-    }
-
-    const response = await fetchImpl(
+    return watchReviewEventsChunked(
+      fetchImpl,
       new URL("/api/review-events/watch", server.url),
       {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
+        projectPath,
+        path: path.relative(projectPath, documentPath),
+        batchWindowSeconds:
+          typeof args.batchWindowSeconds === "number"
+            ? args.batchWindowSeconds
+            : 0.25,
+        initialFromNow: true,
+        overallTimeoutSeconds:
+          typeof args.timeoutSeconds === "number"
+            ? args.timeoutSeconds
+            : undefined,
       },
     );
-    if (!response.ok) {
-      throw new Error(`Review watch failed: ${response.status}`);
-    }
-    return response.json();
   }
 
   if (name === "roughdraft_reply_to_comment") {

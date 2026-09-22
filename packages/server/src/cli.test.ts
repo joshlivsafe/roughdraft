@@ -1077,7 +1077,11 @@ describe("cli", () => {
     expect(watchRequestBody).toMatchObject({
       batchWindowSeconds: 0,
     });
-    expect(watchRequestBody).not.toHaveProperty("timeoutSeconds");
+    // The request must still be bounded (chunked long-poll) even though the
+    // caller passed no --timeout, so no single fetch is held open past
+    // undici's default headersTimeout. See REVIEW_EVENTS_WATCH_CHUNK_SECONDS.
+    expect(typeof watchRequestBody?.timeoutSeconds).toBe("number");
+    expect(watchRequestBody?.timeoutSeconds).toBeLessThanOrEqual(300);
     await fetch(`http://localhost:${persisted?.port}/api/review-events`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1100,6 +1104,256 @@ describe("cli", () => {
           type: "review.completed",
         },
       ],
+    });
+  });
+
+  it("keeps every /api/review-events/watch request bounded when open runs with no --timeout flag", async () => {
+    const documentPath = path.join(projectDir, "draft.md");
+    fs.writeFileSync(documentPath, "# Draft\n");
+    fs.writeFileSync(
+      devFrontendStateFile,
+      `${JSON.stringify(
+        {
+          apiPort: 3000,
+          appPort: 5173,
+          mode: "full-dev",
+          repoRoot: serverRoot,
+          startedAt: new Date().toISOString(),
+          url: "http://localhost:5173",
+        },
+        null,
+        2,
+      )}\n`,
+    );
+
+    const watchRequestBodies: Array<{
+      timeoutSeconds?: number;
+      afterSequence?: number;
+      fromNow?: boolean;
+      batchWindowSeconds?: number;
+    }> = [];
+
+    const deps = createCliDependencies({
+      env: {
+        ...process.env,
+        ROUGHDRAFT_STATE_DIR: stateDir,
+        ROUGHDRAFT_DEV_FRONTEND_STATE_FILE: devFrontendStateFile,
+      },
+      cwd: projectDir,
+      fetchImpl: async (input, init) => {
+        const url =
+          input instanceof URL
+            ? input
+            : new URL(
+                typeof input === "string" ? input : input.url,
+                "http://localhost",
+              );
+
+        if (url.pathname === "/api/status" && url.port === "5173") {
+          return new Response(
+            JSON.stringify({
+              backend: "local-files",
+              port: 3000,
+              projectDir,
+              serverRoot,
+            }),
+            {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            },
+          );
+        }
+
+        if (url.pathname === "/api/review-events/watch") {
+          const body = JSON.parse(String(init?.body ?? "{}")) as {
+            timeoutSeconds?: number;
+            afterSequence?: number;
+            fromNow?: boolean;
+            batchWindowSeconds?: number;
+          };
+          watchRequestBodies.push(body);
+
+          // Simulate two empty chunks (no event yet, server-side timeout)
+          // before a chunk finally carries the real event. A correct
+          // implementation must issue a fresh bounded request for each
+          // chunk instead of holding one open-ended request forever.
+          if (watchRequestBodies.length < 3) {
+            return new Response(
+              JSON.stringify({ events: [], timedOut: true, nextSequence: 5 }),
+              {
+                status: 200,
+                headers: { "Content-Type": "application/json" },
+              },
+            );
+          }
+
+          return new Response(
+            JSON.stringify({
+              events: [{ documentPath, type: "review.completed" }],
+              timedOut: false,
+              nextSequence: 6,
+            }),
+            {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            },
+          );
+        }
+
+        throw new Error(`Unexpected request: ${url.toString()}`);
+      },
+      spawnServerProcess: async () => {
+        throw new Error("should not spawn");
+      },
+      isProcessRunning: () => false,
+      stopProcess: async () => {},
+      openUrl: () => "disabled",
+      log: () => {},
+      error: () => {},
+      resolveUpdateStatus: noUpdateStatus,
+    });
+
+    const exitCode = await runCli(
+      ["open", documentPath, "--json", "--batch-window", "0"],
+      deps,
+    );
+
+    expect(exitCode).toBe(0);
+    // The bug: today's CLI sends a single request with no timeoutSeconds
+    // at all (an unbounded wait), so it never reaches a third chunk.
+    expect(watchRequestBodies.length).toBeGreaterThanOrEqual(3);
+    for (const body of watchRequestBodies) {
+      expect(typeof body.timeoutSeconds).toBe("number");
+      expect(body.timeoutSeconds as number).toBeGreaterThan(0);
+      expect(body.timeoutSeconds as number).toBeLessThanOrEqual(300);
+    }
+  });
+
+  it("resumes watch chunks from the server's nextSequence instead of rescanning from now", async () => {
+    const documentPath = path.join(projectDir, "draft.md");
+    fs.writeFileSync(documentPath, "# Draft\n");
+    fs.writeFileSync(
+      devFrontendStateFile,
+      `${JSON.stringify(
+        {
+          apiPort: 3000,
+          appPort: 5173,
+          mode: "full-dev",
+          repoRoot: serverRoot,
+          startedAt: new Date().toISOString(),
+          url: "http://localhost:5173",
+        },
+        null,
+        2,
+      )}\n`,
+    );
+
+    const watchRequestBodies: Array<{
+      afterSequence?: number;
+      fromNow?: boolean;
+    }> = [];
+    const logs: string[] = [];
+
+    const deps = createCliDependencies({
+      env: {
+        ...process.env,
+        ROUGHDRAFT_STATE_DIR: stateDir,
+        ROUGHDRAFT_DEV_FRONTEND_STATE_FILE: devFrontendStateFile,
+      },
+      cwd: projectDir,
+      fetchImpl: async (input, init) => {
+        const url =
+          input instanceof URL
+            ? input
+            : new URL(
+                typeof input === "string" ? input : input.url,
+                "http://localhost",
+              );
+
+        if (url.pathname === "/api/status" && url.port === "5173") {
+          return new Response(
+            JSON.stringify({
+              backend: "local-files",
+              port: 3000,
+              projectDir,
+              serverRoot,
+            }),
+            {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            },
+          );
+        }
+
+        if (url.pathname === "/api/review-events/watch") {
+          const body = JSON.parse(String(init?.body ?? "{}")) as {
+            afterSequence?: number;
+            fromNow?: boolean;
+          };
+          watchRequestBodies.push(body);
+
+          // First chunk: nothing yet, but the server hands back the
+          // sequence position it left off at.
+          if (watchRequestBodies.length === 1) {
+            return new Response(
+              JSON.stringify({ events: [], timedOut: true, nextSequence: 9 }),
+              {
+                status: 200,
+                headers: { "Content-Type": "application/json" },
+              },
+            );
+          }
+
+          // Second chunk: the real event. Only correct if the CLI asked
+          // to resume after sequence 9 rather than rescanning from now.
+          return new Response(
+            JSON.stringify({
+              events: [{ documentPath, type: "review.completed" }],
+              timedOut: false,
+              nextSequence: 10,
+            }),
+            {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            },
+          );
+        }
+
+        throw new Error(`Unexpected request: ${url.toString()}`);
+      },
+      spawnServerProcess: async () => {
+        throw new Error("should not spawn");
+      },
+      isProcessRunning: () => false,
+      stopProcess: async () => {},
+      openUrl: () => "disabled",
+      log: (message) => logs.push(message),
+      error: () => {},
+      resolveUpdateStatus: noUpdateStatus,
+    });
+
+    const exitCode = await runCli(
+      ["open", documentPath, "--json", "--batch-window", "0"],
+      deps,
+    );
+
+    expect(exitCode).toBe(0);
+    // The bug: today's CLI never issues a second request at all, so this
+    // resume contract can't be satisfied.
+    expect(watchRequestBodies.length).toBeGreaterThanOrEqual(2);
+    expect(watchRequestBodies[0]?.fromNow).toBe(true);
+    expect(watchRequestBodies[1]).toMatchObject({
+      afterSequence: 9,
+      fromNow: false,
+    });
+
+    const payload = parseOnlyJsonLog<{
+      timedOut: boolean;
+      events: Array<{ documentPath: string; type: string }>;
+    }>(logs);
+    expect(payload).toMatchObject({
+      timedOut: false,
+      events: [{ documentPath, type: "review.completed" }],
     });
   });
 
