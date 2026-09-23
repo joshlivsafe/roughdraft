@@ -222,6 +222,50 @@ describe("ReviewEventQueue", () => {
     vi.useRealTimers();
   });
 
+  it("delivers an event to a watcher that idled through one or more empty chunk timeouts before reconnecting with the server's own resume cursor", async () => {
+    vi.useFakeTimers();
+    const queue = new ReviewEventQueue();
+
+    // Mirror watchReviewEventsChunked()'s real resume behavior: after each
+    // empty chunk, the client re-issues wait() using the *previous* result's
+    // own `nextSequence` as its new `afterSequence`, verbatim - it never
+    // computes that cursor itself.
+    let afterSequence: number | undefined;
+    let chunk = queue.wait({
+      documentPath: "/tmp/project/draft.md",
+      timeoutMs: 1_000,
+      batchWindowMs: 0,
+    });
+
+    // Idle through a couple of empty chunk timeouts, exactly like a watcher
+    // left open on a document nobody has touched yet.
+    for (let i = 0; i < 2; i += 1) {
+      await vi.advanceTimersByTimeAsync(1_000);
+      const result = await chunk;
+      expect(result.timedOut).toBe(true);
+      afterSequence = result.nextSequence;
+      chunk = queue.wait({
+        documentPath: "/tmp/project/draft.md",
+        afterSequence,
+        timeoutMs: 1_000,
+        batchWindowMs: 0,
+      });
+    }
+
+    // A submission lands while this reconnected chunk is live. Advance past
+    // this chunk's own timeout afterward so the assertion is deterministic
+    // either way instead of hanging if the match never happens.
+    const emitted = queue.emit(eventInput("/tmp/project/draft.md"));
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    await expect(chunk).resolves.toMatchObject({
+      timedOut: false,
+      events: [emitted.event],
+    });
+    expect(emitted.delivered).toBe(true);
+    vi.useRealTimers();
+  });
+
   it("prunes retained events deterministically", async () => {
     const queue = new ReviewEventQueue();
 

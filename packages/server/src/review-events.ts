@@ -111,6 +111,12 @@ export class ReviewEventQueue {
     if (delivered) return { delivered, event };
 
     const key = path.resolve(event.documentPath);
+    appendSlog("review-events.emitAwaitingDelivery.grace-start", {
+      documentPath: key,
+      sequence: event.sequence,
+      graceMs,
+      existingListenerCount: this.pickupListeners.get(key)?.size ?? 0,
+    });
     const pickedUp = await new Promise<boolean>((resolve) => {
       let listeners = this.pickupListeners.get(key);
       if (!listeners) {
@@ -124,10 +130,20 @@ export class ReviewEventQueue {
       };
       const listener = (sequence: number) => {
         if (sequence < event.sequence) return;
+        appendSlog("review-events.emitAwaitingDelivery.picked-up", {
+          documentPath: key,
+          sequence: event.sequence,
+          pickupSequence: sequence,
+        });
         cleanup();
         resolve(true);
       };
       const timer = setTimeout(() => {
+        appendSlog("review-events.emitAwaitingDelivery.grace-timeout", {
+          documentPath: key,
+          sequence: event.sequence,
+          graceMs,
+        });
         cleanup();
         resolve(false);
       }, graceMs);
@@ -144,6 +160,11 @@ export class ReviewEventQueue {
   ): void {
     if (!documentPath || events.length === 0) return;
     const listeners = this.pickupListeners.get(documentPath);
+    appendSlog("review-events.notifyPickup", {
+      documentPath,
+      eventSequences: events.map((event) => event.sequence),
+      listenerCount: listeners?.size ?? 0,
+    });
     if (!listeners || listeners.size === 0) return;
 
     const maxSequence = Math.max(...events.map((event) => event.sequence));
@@ -161,7 +182,7 @@ export class ReviewEventQueue {
     if (existing.length > 0) {
       this.notifyPickup(normalized.documentPath, existing);
       return Promise.resolve(
-        resultForEvents(existing, false, this.nextSequence),
+        resultForEvents(existing, false, this.latestSequence()),
       );
     }
 
@@ -233,7 +254,13 @@ export class ReviewEventQueue {
     }
 
     const events = timedOut ? [] : this.matchingEvents(waiter.options);
-    waiter.resolve(resultForEvents(events, timedOut, this.nextSequence));
+    appendSlog("review-events.resolveWaiter", {
+      documentPath: waiter.options.documentPath ?? null,
+      timedOut,
+      resolvedEventSequences: events.map((event) => event.sequence),
+      nextSequence: this.latestSequence(),
+    });
+    waiter.resolve(resultForEvents(events, timedOut, this.latestSequence()));
   }
 }
 

@@ -377,6 +377,64 @@ export function shouldLatchDocumentChangedSinceOpen({
   return isDirty && documentChangeTrackingReady;
 }
 
+export interface ReviewHandoffSelfHealAction {
+  nextState: Extract<ReviewHandoffState, "idle"> | null;
+  closePopover: boolean;
+  nextSawNoWatcherAfterNotified: boolean;
+}
+
+// A watcher can reappear after we've already given up (shown "undelivered")
+// or after we thought it had disconnected mid-"notified". Recovering the
+// state back to idle without also closing the popover leaves the
+// comment-composer popover open, looking like it sprang open on its own.
+export function getReviewHandoffSelfHealAction({
+  reviewHandoffState,
+  reviewWatcherCount,
+  sawNoWatcherAfterNotified,
+}: {
+  reviewHandoffState: ReviewHandoffState;
+  reviewWatcherCount: number;
+  sawNoWatcherAfterNotified: boolean;
+}): ReviewHandoffSelfHealAction {
+  if (reviewHandoffState === "undelivered" && reviewWatcherCount > 0) {
+    return {
+      nextState: "idle",
+      closePopover: true,
+      nextSawNoWatcherAfterNotified: sawNoWatcherAfterNotified,
+    };
+  }
+
+  if (reviewHandoffState !== "notified") {
+    return {
+      nextState: null,
+      closePopover: false,
+      nextSawNoWatcherAfterNotified: false,
+    };
+  }
+
+  if (reviewWatcherCount === 0) {
+    return {
+      nextState: null,
+      closePopover: false,
+      nextSawNoWatcherAfterNotified: true,
+    };
+  }
+
+  if (sawNoWatcherAfterNotified) {
+    return {
+      nextState: "idle",
+      closePopover: true,
+      nextSawNoWatcherAfterNotified: false,
+    };
+  }
+
+  return {
+    nextState: null,
+    closePopover: false,
+    nextSawNoWatcherAfterNotified: sawNoWatcherAfterNotified,
+  };
+}
+
 interface DocumentWorkspaceProps {
   documentPage: Page | null;
   activeDocumentPath: string | null;
@@ -505,24 +563,18 @@ export function DocumentWorkspace({
   }, [activeDocumentPath, backend]);
 
   useEffect(() => {
-    if (reviewHandoffState === "undelivered" && reviewWatcherCount > 0) {
-      setReviewHandoffState("idle");
-      return;
-    }
+    const action = getReviewHandoffSelfHealAction({
+      reviewHandoffState,
+      reviewWatcherCount,
+      sawNoWatcherAfterNotified: sawNoWatcherAfterNotifiedRef.current,
+    });
 
-    if (reviewHandoffState !== "notified") {
-      sawNoWatcherAfterNotifiedRef.current = false;
-      return;
+    sawNoWatcherAfterNotifiedRef.current = action.nextSawNoWatcherAfterNotified;
+    if (action.nextState) {
+      setReviewHandoffState(action.nextState);
     }
-
-    if (reviewWatcherCount === 0) {
-      sawNoWatcherAfterNotifiedRef.current = true;
-      return;
-    }
-
-    if (sawNoWatcherAfterNotifiedRef.current) {
-      sawNoWatcherAfterNotifiedRef.current = false;
-      setReviewHandoffState("idle");
+    if (action.closePopover) {
+      setReviewHandoffPopoverOpen(false);
     }
   }, [reviewHandoffState, reviewWatcherCount]);
 
