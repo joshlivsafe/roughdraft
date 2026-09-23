@@ -43,6 +43,7 @@ interface Waiter {
 
 const DEFAULT_BATCH_WINDOW_MS = 250;
 const MAX_RETAINED_EVENTS = 100;
+const DEFAULT_DELIVERY_GRACE_MS = 3_000;
 
 type NormalizedWaitOptions = Required<
   Omit<WaitForReviewEventsOptions, "documentPath" | "timeoutMs">
@@ -55,6 +56,12 @@ export class ReviewEventQueue {
   private events: ReviewCompletedEvent[] = [];
   private waiters = new Set<Waiter>();
   private nextSequence = 1;
+  // Listeners waiting to hear that a specific (not-yet-delivered) event was
+  // picked up by a watcher, keyed by resolved documentPath. Lets emit()
+  // tolerate the brief reconnect gap in a chunked long-poll instead of
+  // reporting "no watcher" for an event the watcher's next chunk will still
+  // receive.
+  private pickupListeners = new Map<string, Set<(sequence: number) => void>>();
 
   emit(input: ReviewCompletedEventInput): {
     delivered: boolean;
@@ -89,6 +96,62 @@ export class ReviewEventQueue {
     return { delivered, event };
   }
 
+  // Same as emit(), but when no watcher is currently registered it waits up
+  // to graceMs for a watcher to reconnect and pick up the event before
+  // reporting non-delivery. A chunked long-poll watcher briefly has no
+  // in-flight request while it re-issues its next chunk; without this grace
+  // period, an emit() landing in that gap would falsely report the watcher
+  // as disconnected even though its very next chunk resumes from this event
+  // and receives it.
+  async emitAwaitingDelivery(
+    input: ReviewCompletedEventInput,
+    graceMs: number = DEFAULT_DELIVERY_GRACE_MS,
+  ): Promise<{ delivered: boolean; event: ReviewCompletedEvent }> {
+    const { delivered, event } = this.emit(input);
+    if (delivered) return { delivered, event };
+
+    const key = path.resolve(event.documentPath);
+    const pickedUp = await new Promise<boolean>((resolve) => {
+      let listeners = this.pickupListeners.get(key);
+      if (!listeners) {
+        listeners = new Set();
+        this.pickupListeners.set(key, listeners);
+      }
+
+      const cleanup = () => {
+        clearTimeout(timer);
+        listeners?.delete(listener);
+      };
+      const listener = (sequence: number) => {
+        if (sequence < event.sequence) return;
+        cleanup();
+        resolve(true);
+      };
+      const timer = setTimeout(() => {
+        cleanup();
+        resolve(false);
+      }, graceMs);
+
+      listeners.add(listener);
+    });
+
+    return { delivered: pickedUp, event };
+  }
+
+  private notifyPickup(
+    documentPath: string | undefined,
+    events: ReviewCompletedEvent[],
+  ): void {
+    if (!documentPath || events.length === 0) return;
+    const listeners = this.pickupListeners.get(documentPath);
+    if (!listeners || listeners.size === 0) return;
+
+    const maxSequence = Math.max(...events.map((event) => event.sequence));
+    for (const listener of [...listeners]) {
+      listener(maxSequence);
+    }
+  }
+
   wait(
     options: WaitForReviewEventsOptions = {},
   ): Promise<WaitForReviewEventsResult> {
@@ -96,6 +159,7 @@ export class ReviewEventQueue {
     const existing = this.matchingEvents(normalized);
 
     if (existing.length > 0) {
+      this.notifyPickup(normalized.documentPath, existing);
       return Promise.resolve(
         resultForEvents(existing, false, this.nextSequence),
       );

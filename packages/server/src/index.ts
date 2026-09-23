@@ -636,7 +636,7 @@ export function createApp(options: CreateAppOptions = {}): CreateAppResult {
     });
   });
 
-  app.post("/api/review-events", (req, res) => {
+  app.post("/api/review-events", async (req, res) => {
     const target = markdownPathFromRequest(req, res);
     if (!target) return;
 
@@ -663,7 +663,7 @@ export function createApp(options: CreateAppOptions = {}): CreateAppResult {
     }
 
     const index = extractRoughdraftReviewIndex(persistedMarkdown);
-    const result = reviewEvents.emit({
+    const result = await reviewEvents.emitAwaitingDelivery({
       documentPath: target.absolutePath,
       projectPath: target.projectDir,
       relativePath: target.relativePath,

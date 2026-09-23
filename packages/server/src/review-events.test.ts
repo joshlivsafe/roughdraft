@@ -170,6 +170,58 @@ describe("ReviewEventQueue", () => {
     vi.useRealTimers();
   });
 
+  it("reports delivered when a chunked watcher reconnects during the grace period after a boundary gap", async () => {
+    vi.useFakeTimers();
+    const queue = new ReviewEventQueue();
+
+    // Simulate a chunked long-poll: the first chunk times out and its
+    // waiter is removed, but the client hasn't re-issued the next chunk
+    // request yet. This is the reconnect gap introduced by chunking the
+    // watch request into bounded windows instead of one persistent poll.
+    const firstChunk = queue.wait({
+      documentPath: "/tmp/project/draft.md",
+      timeoutMs: 1_000,
+      batchWindowMs: 0,
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+    await expect(firstChunk).resolves.toMatchObject({ timedOut: true });
+    expect(queue.waiterCountForDocument("/tmp/project/draft.md")).toBe(0);
+
+    // A submit lands exactly in the gap: no watcher is registered yet.
+    const deliveryPromise = queue.emitAwaitingDelivery(
+      eventInput("/tmp/project/draft.md"),
+      5_000,
+    );
+
+    // The client's chunked loop reconnects shortly after (well within the
+    // grace period) and resumes from where it left off.
+    await vi.advanceTimersByTimeAsync(50);
+    const secondChunk = queue.wait({
+      documentPath: "/tmp/project/draft.md",
+      afterSequence: 0,
+      timeoutMs: 1_000,
+      batchWindowMs: 0,
+    });
+
+    await expect(deliveryPromise).resolves.toMatchObject({ delivered: true });
+    await expect(secondChunk).resolves.toMatchObject({ timedOut: false });
+    vi.useRealTimers();
+  });
+
+  it("reports undelivered once the grace period elapses with no reconnect", async () => {
+    vi.useFakeTimers();
+    const queue = new ReviewEventQueue();
+
+    const deliveryPromise = queue.emitAwaitingDelivery(
+      eventInput("/tmp/project/draft.md"),
+      2_000,
+    );
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    await expect(deliveryPromise).resolves.toMatchObject({ delivered: false });
+    vi.useRealTimers();
+  });
+
   it("prunes retained events deterministically", async () => {
     const queue = new ReviewEventQueue();
 
