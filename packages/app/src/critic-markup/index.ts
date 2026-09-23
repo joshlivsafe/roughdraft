@@ -1079,7 +1079,27 @@ function addCriticCodeBlockRule(service: TurndownService) {
         [...codeElement.classList]
           .find((className) => className.startsWith("language-"))
           ?.slice("language-".length) ?? "";
-      const content = service.turndown(codeElement.innerHTML).trimEnd();
+
+      // Turndown's own whitespace collapsing only skips subtrees rooted at
+      // a <pre>/<code> element (see its collapseWhitespace/isPre logic).
+      // We can't just wrap this fragment in a real <pre><code> to get that
+      // protection: a <pre><code> containing a comment/change span would
+      // match this very rule's filter again (infinite recursion), and a
+      // bare top-level <code> triggers Turndown's *inline* code rule
+      // instead, which strips newlines unconditionally on its own. So
+      // newlines are protected by substitution instead of by DOM shape:
+      // swap them for a placeholder Turndown's collapsing won't touch,
+      // convert, then restore them.
+      const newlinePlaceholder = " ";
+      const protectedHtml = codeElement.innerHTML.replace(
+        /\r\n|\r|\n/g,
+        newlinePlaceholder,
+      );
+      const content = service
+        .turndown(protectedHtml)
+        .split(newlinePlaceholder)
+        .join("\n")
+        .trimEnd();
 
       return `\n\n\`\`\`${language}\n${content}\n\`\`\`\n\n`;
     },

@@ -712,7 +712,10 @@ const MarkdownLink = Link.extend({
 });
 
 const MarkdownCode = Code.extend({
-  excludes: "bold italic strike link",
+  // A link's text can be a code span (e.g. `[`RESEARCH.md`](path)`), so
+  // `link` is deliberately not excluded here. `bold`/`italic`/`strike`
+  // still are: a code span can't semantically contain emphasis markers.
+  excludes: "bold italic strike",
 });
 
 const MarkdownCodeBlock = CodeBlock.extend({
