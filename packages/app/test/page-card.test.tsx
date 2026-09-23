@@ -1145,6 +1145,107 @@ describe("PageCard editor integration", () => {
     );
   });
 
+  async function suggestNewListItemAfter(
+    editor: Editor,
+    anchorText: string,
+    typed: string,
+  ) {
+    await act(async () => {
+      const range = findTextRange(editor, anchorText);
+      expect(range).not.toBeNull();
+      editor.commands.focus();
+      editor.commands.setTextSelection(range?.to ?? 1);
+    });
+    await pressEditorKey(editor, "Enter");
+    await typeTextAsBrowserInput(editor, typed);
+    await act(async () => {
+      vi.advanceTimersByTime(500);
+      await Promise.resolve();
+    });
+  }
+
+  it.each([
+    ["-", "- one\n- two\n"],
+    ["*", "* one\n* two\n"],
+  ])("suggesting mode tracks Enter at the end of a %s list item as an inserted list item", async (_marker, content) => {
+    const rendered = await renderPageCard({
+      page: {
+        id: "doc-suggesting-enter-list-item-1",
+        title: "Doc Suggesting Enter List Item 1",
+        content,
+      },
+      interactionMode: "suggesting",
+      selected: true,
+    });
+    const editor = rendered.getEditor();
+
+    vi.useFakeTimers();
+    await suggestNewListItemAfter(editor, "one", "three");
+
+    expect(rendered.onSave).toHaveBeenLastCalledWith(
+      "doc-suggesting-enter-list-item-1",
+      expect.stringMatching(
+        /^- one\n- \{\+\+\u2060?three\+\+\}\{id="s1" by="user" at="[^"]+"\}\n- two\n$/,
+      ),
+    );
+  });
+
+  it("accepting an inserted list item suggestion yields a plain list item", async () => {
+    const rendered = await renderPageCard({
+      page: {
+        id: "doc-suggesting-enter-list-item-accept-1",
+        title: "Doc Suggesting Enter List Item Accept 1",
+        content: "- one\n- two\n",
+      },
+      interactionMode: "suggesting",
+      selected: true,
+    });
+    const editor = rendered.getEditor();
+
+    vi.useFakeTimers();
+    await suggestNewListItemAfter(editor, "one", "three");
+    await act(async () => {
+      editor.commands.acceptCriticChange("s1");
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(500);
+      await Promise.resolve();
+    });
+
+    expect(rendered.onSave).toHaveBeenLastCalledWith(
+      "doc-suggesting-enter-list-item-accept-1",
+      "- one\n- three\n- two\n",
+    );
+  });
+
+  it("rejecting an inserted list item suggestion removes the whole item", async () => {
+    const rendered = await renderPageCard({
+      page: {
+        id: "doc-suggesting-enter-list-item-reject-1",
+        title: "Doc Suggesting Enter List Item Reject 1",
+        content: "- one\n- two\n",
+      },
+      interactionMode: "suggesting",
+      selected: true,
+    });
+    const editor = rendered.getEditor();
+
+    vi.useFakeTimers();
+    await suggestNewListItemAfter(editor, "one", "three");
+    await act(async () => {
+      editor.commands.rejectCriticChange("s1");
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(500);
+      await Promise.resolve();
+    });
+
+    expect(rendered.onSave).toHaveBeenLastCalledWith(
+      "doc-suggesting-enter-list-item-reject-1",
+      "- one\n- two\n",
+    );
+  });
+
   it("accepts and rejects inserted paragraph suggestions without leaving marker text", async () => {
     const accepted = await renderPageCard({
       page: {

@@ -1019,7 +1019,23 @@ const RichTextEditorSurface = memo(function RichTextEditorSurface({
               existingChanges: getDocumentCriticChanges(currentEditor),
             });
             const mark = view.state.schema.marks.criticChange.create(change);
-            const tr = view.state.tr.split(selection.from);
+            // Inside a list item, split the item too so the suggestion becomes
+            // a sibling item rather than a continuation paragraph.
+            const listItem = $from.depth > 1 ? $from.node(-1) : null;
+            const isListItem =
+              listItem?.type.name === "listItem" ||
+              listItem?.type.name === "taskItem";
+            const tr = isListItem
+              ? view.state.tr.split(selection.from, 2, [
+                  {
+                    type: listItem.type,
+                    attrs:
+                      listItem.type.name === "taskItem"
+                        ? { ...listItem.attrs, checked: false }
+                        : listItem.attrs,
+                  },
+                ])
+              : view.state.tr.split(selection.from);
             const insertPos = tr.selection.from;
 
             tr.insert(

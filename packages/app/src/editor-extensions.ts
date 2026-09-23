@@ -409,7 +409,18 @@ const CriticChange = Mark.create({
                 isOnlyTextblockContent(state.doc, range.from, range.to)
               ) {
                 const $from = state.doc.resolve(range.from);
-                tr.delete($from.before(), $from.after());
+                const container = $from.depth > 1 ? $from.node(-1) : null;
+                const isSoleListItemChild =
+                  (container?.type.name === "listItem" ||
+                    container?.type.name === "taskItem") &&
+                  container.childCount === 1;
+                // A suggested list item owns its whole item, so rejecting it
+                // removes the item rather than leaving an empty bullet.
+                if (isSoleListItemChild) {
+                  tr.delete($from.before(-1), $from.after(-1));
+                } else {
+                  tr.delete($from.before(), $from.after());
+                }
               } else {
                 tr.delete(range.from, range.to);
               }
